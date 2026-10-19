@@ -1,0 +1,52 @@
+{
+  "name": "dsh-diary",
+  "version": "0.1.0",
+  "description": "每日日记：按自然日（Asia/Shanghai）聚合当天所有会话的轮次、步数、耗时与 token 用量，生成当天重点总结，并在极简面板中浏览最近 N 天。",
+  "type": "module",
+  "main": "index.js",
+  "icon": "icon.svg",
+  "license": "MIT",
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale/en.json",
+    "locale/zh.json",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ]
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "dsh-diary",
+    "deepseek-harness",
+    "journal",
+    "daily-summary"
+  ],
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}

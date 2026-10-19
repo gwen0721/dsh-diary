@@ -1,0 +1,24 @@
+# dsh-diary bundle patch
+#
+# 只挂载本插件一行。
+#
+# 依赖服务不在本层重复 insert：storage / storage-json / storage-domain /
+# session-projection / session-stats / token-meter / llm / schedule / webServer
+# 已由 dsh-base 与 dsh-web-app 两个 bundle 层挂载（见 asar 内
+# @deepseek-ai/dsh-base/cordis.patch.yml 与 dsh-web-app/cordis.patch.yml）。
+# 同一 name 挂两次会让整棵插件树在启动时失败（重复 provide 同名服务 /
+# duplicate prefix route），profile 里其它已装插件的 patch 也都只 insert 自己一行。
+#
+# 注意：id 那一行不要写行尾注释。
+- insert:
+    - id: dsh-diary
+      name: dsh-diary
+      config:
+        time: "23:00:00"
+        timeZone: "Asia/Shanghai"
+        retentionDays: 90
+        panelDays: 14
+        summaryPoints: 4
+        autoGenerate: true
+        provider: ""
+        model: ""
