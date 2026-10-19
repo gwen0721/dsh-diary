@@ -53,6 +53,9 @@ window.__ModuleLoader__.load({
       '.dd-num{text-align:right;font-variant-numeric:tabular-nums}',
       '.dd-error{font-size:12px;color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1);padding:6px 8px}',
       '.dd-empty{font-size:12px;color:var(--dsw-alias-label-secondary);padding:10px}',
+      '.dd-textarea{display:block;width:100%;box-sizing:border-box;font:inherit;font-size:12px;line-height:1.6;padding:6px 8px;min-height:76px;resize:vertical;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);border:1px solid var(--dsw-alias-border-l1)}',
+      '.dd-textarea::placeholder{color:var(--dsw-alias-label-secondary)}',
+      '.dd-textarea:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-1px}',
     ].join('')
 
     function createOwnedStyle(css) {
@@ -159,8 +162,65 @@ window.__ModuleLoader__.load({
       return h('table', { className: 'dd-table' }, h('thead', null, head), h('tbody', null, rows))
     }
 
+    /** 手写体会的编辑区。与自动生成的重点总结互不影响。 */
+    function JournalEditor(props) {
+      const { date, journal, saving, onSave } = props
+      const savedText = typeof journal?.text === 'string' ? journal.text : ''
+      const [draft, setDraft] = useState(savedText)
+      const [dirty, setDirty] = useState(false)
+
+      useEffect(() => {
+        setDraft(savedText)
+        setDirty(false)
+      }, [date, savedText])
+
+      const updatedAt = typeof journal?.updatedAt === 'number' ? journal.updatedAt : null
+
+      return h(
+        'div',
+        { className: 'dd-section' },
+        h('p', { className: 'dd-section-title' }, '我的体会'),
+        h('textarea', {
+          className: 'dd-textarea',
+          value: draft,
+          rows: 4,
+          maxLength: 4000,
+          spellCheck: false,
+          placeholder: '写下今天的感受、卡住的地方，或者明天要继续做的事…',
+          onChange: (event) => {
+            setDraft(event.target.value)
+            setDirty(true)
+          },
+          onKeyDown: (event) => {
+            // 在输入框里按 Escape 不该关闭详情，否则会丢掉还没保存的内容。
+            if (event.key === 'Escape') event.stopPropagation()
+          },
+        }),
+        h(
+          'div',
+          { className: 'dd-toolbar' },
+          h(
+            'button',
+            {
+              className: 'dd-btn',
+              type: 'button',
+              disabled: saving === true || !dirty,
+              onClick: () => onSave(date, draft),
+            },
+            saving === true ? '保存中…' : '保存体会',
+          ),
+          dirty
+            ? h('span', { className: 'dd-muted' }, '未保存')
+            : updatedAt !== null
+              ? h('span', { className: 'dd-muted' }, `已保存于 ${formatTime(updatedAt)}`)
+              : null,
+          h('span', { className: 'dd-muted' }, `${draft.length}/4000`),
+        ),
+      )
+    }
+
     function DayDetail(props) {
-      const { date, entry, loading, error } = props
+      const { date, entry, loading, error, saving, onSaveJournal } = props
       if (loading) {
         return h('div', { className: 'dd-detail' }, h('p', { className: 'dd-note' }, '读取中…'))
       }
@@ -168,7 +228,12 @@ window.__ModuleLoader__.load({
         return h('div', { className: 'dd-detail' }, h('p', { className: 'dd-error' }, `读取失败：${String(error)}`))
       }
       if (entry === null || entry === undefined) {
-        return h('div', { className: 'dd-detail' }, h('p', { className: 'dd-empty' }, `${date} 还没有日记条目。可以点“生成今天”或在当天 23:00 后自动生成。`))
+        return h(
+          'div',
+          { className: 'dd-detail' },
+          h('p', { className: 'dd-empty' }, `${date} 还没有会话汇总。点“生成今天”可以把当天会话收进来；体会现在就能写，会先存下来。`),
+          h(JournalEditor, { date, journal: null, saving, onSave: onSaveJournal }),
+        )
       }
       const totals = entry.totals ?? {}
       const sourceLabel = entry.highlightSource === 'llm' ? '模型总结' : '原文摘录（降级）'
@@ -199,6 +264,7 @@ window.__ModuleLoader__.load({
             ? h('ul', { className: 'dd-points' }, entry.highlights.map((point, index) => h('li', { key: index }, point)))
             : h('p', { className: 'dd-note' }, '没有可用的总结。'),
         ),
+        h(JournalEditor, { date: entry.date, journal: entry.journal, saving, onSave: onSaveJournal }),
         h('div', { className: 'dd-section' }, h('p', { className: 'dd-section-title' }, '会话明细'), h(SessionTable, { sessions: entry.sessions })),
         h('p', { className: 'dd-note' }, entry.note ?? 'token 占用是估算数字，不是计费记录。'),
       )
@@ -211,6 +277,7 @@ window.__ModuleLoader__.load({
       const [selected, setSelected] = useState(null)
       const [detailState, setDetailState] = useState({ loading: false, error: null, entry: null, date: null })
       const [busy, setBusy] = useState(false)
+      const [savingJournal, setSavingJournal] = useState(false)
       const [notice, setNotice] = useState(null)
 
       const loadDays = useCallback(async () => {
@@ -268,6 +335,25 @@ window.__ModuleLoader__.load({
         }
       }, [loadDays, loadDay, selected])
 
+      const onSaveJournal = useCallback(
+        async (date, text) => {
+          setSavingJournal(true)
+          setNotice(null)
+          try {
+            const data = await apiPost('/journal', { date, text })
+            if (data?.ok !== true) throw new Error(data?.error ?? 'unknown error')
+            setDetailState((prev) => (prev.date === date ? { ...prev, entry: data.entry ?? prev.entry } : prev))
+            setNotice(data.journal === null ? `已清空 ${date} 的体会` : `已保存 ${date} 的体会`)
+            await loadDays()
+          } catch (err) {
+            setNotice(`保存失败：${String(err?.message ?? err)}`)
+          } finally {
+            setSavingJournal(false)
+          }
+        },
+        [loadDays],
+      )
+
       const onKeyDownRow = useCallback(
         (event, date) => {
           if (event.key === 'Enter' || event.key === ' ') {
@@ -292,15 +378,16 @@ window.__ModuleLoader__.load({
               : h(
                   'span',
                   null,
-                  `${day.sessions} 会话 · ${day.turns} 轮 · ${day.steps} 步`,
-                  h('span', { className: 'dd-badge' }, `token≈${formatTokens(day.totalTokens)}`),
+                  day.sessions > 0 ? `${day.sessions} 会话 · ${day.turns} 轮 · ${day.steps} 步` : '没有会话',
+                  day.sessions > 0 ? h('span', { className: 'dd-badge' }, `token≈${formatTokens(day.totalTokens)}`) : null,
+                  day.hasJournal === true ? h('span', { className: 'dd-badge' }, '有体会') : null,
                 )
             const right = day.missing === true
               ? h('span', { className: 'dd-right' }, '—')
               : h(
                   'span',
                   { className: 'dd-right' },
-                  day.highlightSource === 'llm' ? '模型总结' : '原文摘录',
+                  day.highlightSource === 'llm' ? '模型总结' : day.highlightSource === 'none' ? '未汇总' : '原文摘录',
                 )
             return h(
               'div',
@@ -348,8 +435,15 @@ window.__ModuleLoader__.load({
         ),
         rows,
         selected !== null
-          ? h(DayDetail, { date: selected, entry: detailState.entry, loading: detailState.loading, error: detailState.error })
-          : h('p', { className: 'dd-note' }, '点开某一天查看当天详情。'),
+          ? h(DayDetail, {
+              date: selected,
+              entry: detailState.entry,
+              loading: detailState.loading,
+              error: detailState.error,
+              saving: savingJournal,
+              onSaveJournal,
+            })
+          : h('p', { className: 'dd-note' }, '点开某一天查看当天详情，可以写自己的体会。'),
       )
     }
 

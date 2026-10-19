@@ -22,6 +22,8 @@ const TZ_OFFSET_MS = 8 * 60 * 60 * 1000
 const DAY_MS = 24 * 60 * 60 * 1000
 const PROJECTION_KEYS = ['sessionStats', 'tokenUsage']
 const NOTE = 'token 占用是 token-meter 的估算数字，仅作参考，不是计费记录。'
+/** 一天手写体会的长度上限。 */
+const JOURNAL_MAX = 4000
 
 export const name = 'dsh-diary'
 
@@ -229,6 +231,82 @@ export function apply(ctx, config = {}) {
     const domain = await ensureDomain()
     await domain.table(TABLE_ENTRIES).put(entry.date, entry)
     return entry
+  }
+
+  async function deleteEntry(dayKey) {
+    const domain = await ensureDomain()
+    return domain.table(TABLE_ENTRIES).delete(dayKey)
+  }
+
+  /** 用户自己写的体会。与自动生成的 highlights 分开存，互不覆盖。 */
+  function normalizeJournal(value) {
+    if (value === null || typeof value !== 'object') return null
+    const text = typeof value.text === 'string' ? value.text : ''
+    if (text.trim().length === 0) return null
+    return { text: text.slice(0, JOURNAL_MAX), updatedAt: num(value.updatedAt) || 0 }
+  }
+
+  /** 是否只是「为了写体会而建的骨架」——没有任何会话数据。 */
+  function isJournalOnly(entry) {
+    return (
+      entry !== null &&
+      typeof entry === 'object' &&
+      (entry.generatedAt === null || entry.generatedAt === undefined) &&
+      Array.isArray(entry.sessions) &&
+      entry.sessions.length === 0 &&
+      Array.isArray(entry.highlights) &&
+      entry.highlights.length === 0
+    )
+  }
+
+  /**
+   * 写入/清空某天的体会。
+   * 当天还没有条目时（比如昨天的日记尚未生成）也会建一条只含体会的骨架，保证随手记不会丢。
+   */
+  async function saveJournal(dayKey, rawText) {
+    const text = String(rawText ?? '')
+    if (text.length > JOURNAL_MAX) {
+      throw new Error(`体会太长（最多 ${JOURNAL_MAX} 个字符）`)
+    }
+    const trimmed = text.trim()
+    const journal = trimmed.length === 0 ? null : { text, updatedAt: Date.now() }
+    const existing = await readEntry(dayKey)
+    if (existing === undefined) {
+      if (journal === null) return { created: false, entry: null, journal: null }
+      const skeleton = {
+        date: dayKey,
+        generatedAt: null,
+        collectedAt: null,
+        reason: 'journal',
+        timeZone: TIME_ZONE,
+        note: NOTE,
+        sessions: [],
+        totals: totalsOf([]),
+        highlights: [],
+        highlightSource: 'none',
+        highlightProvider: null,
+        highlightModel: null,
+        journal,
+      }
+      await writeEntry(skeleton)
+      log(`journal ${dayKey}: created journal-only entry (${text.length} chars)`)
+      return { created: true, entry: skeleton, journal }
+    }
+    const next = { ...existing }
+    if (journal === null) {
+      // 只有体会、没有会话的骨架条目，清空体会后整条删掉，别在列表里留空行。
+      if (isJournalOnly(existing)) {
+        await deleteEntry(dayKey)
+        log(`journal ${dayKey}: cleared and removed journal-only entry`)
+        return { created: false, entry: null, journal: null }
+      }
+      delete next.journal
+    } else {
+      next.journal = journal
+    }
+    await writeEntry(next)
+    log(`journal ${dayKey}: ${journal === null ? 'cleared' : `saved (${text.length} chars)`}`)
+    return { created: false, entry: next, journal }
   }
 
   async function listEntries() {
@@ -510,6 +588,9 @@ export function apply(ctx, config = {}) {
     const collectedAt = Date.now()
     const totals = totalsOf(rows)
     const highlights = await buildHighlights(dayKey, rows, totals)
+    // 重新生成会整条覆盖，用户手写的体会必须保留下来。
+    const previous = await readEntry(dayKey)
+    const journal = normalizeJournal(previous?.journal)
     const entry = {
       date: dayKey,
       generatedAt: Date.now(),
@@ -524,6 +605,9 @@ export function apply(ctx, config = {}) {
       highlightProvider: highlights.provider,
       highlightModel: highlights.model,
     }
+    if (journal !== null) {
+      entry.journal = journal
+    }
     await writeEntry(entry)
     pruneEntries().catch((err) => warn('prune failed:', err?.message ?? err))
     log(`entry ${dayKey}: ${rows.length} session(s), ${totals.turns} turn(s), highlights=${highlights.source}`)
@@ -532,6 +616,7 @@ export function apply(ctx, config = {}) {
 
   function daySummary(entry) {
     const totals = entry?.totals ?? {}
+    const journal = normalizeJournal(entry?.journal)
     return {
       date: entry.date,
       generatedAt: num(entry.generatedAt) || null,
@@ -542,6 +627,9 @@ export function apply(ctx, config = {}) {
       totalTokens: num(totals.totalTokens),
       highlightSource: entry.highlightSource ?? null,
       highlights: Array.isArray(entry.highlights) ? entry.highlights.slice(0, 2) : [],
+      hasJournal: journal !== null,
+      journalExcerpt: journal === null ? null : clampText(journal.text, 48),
+      journalUpdatedAt: journal === null ? null : journal.updatedAt || null,
       missing: false,
     }
   }
@@ -611,6 +699,23 @@ export function apply(ctx, config = {}) {
     const dayKey = isDayKey(body.date) ? body.date : dayKeyOf(Date.now())
     const entry = await generateDay(dayKey, 'manual')
     return { ok: true, entry, note: NOTE }
+  }
+
+  async function handleJournal(req) {
+    const body = await readJsonBody(req)
+    const dayKey = isDayKey(body.date) ? body.date : dayKeyOf(Date.now())
+    if (typeof body.text !== 'string') {
+      return { ok: false, date: dayKey, error: 'text must be a string' }
+    }
+    const result = await saveJournal(dayKey, body.text)
+    return {
+      ok: true,
+      date: dayKey,
+      created: result.created,
+      journal: result.journal,
+      entry: result.entry,
+      note: NOTE,
+    }
   }
 
   /**
@@ -685,6 +790,10 @@ export function apply(ctx, config = {}) {
           }
           if (req.method === 'POST' && rest === 'generate') {
             sendJson(res, 200, await handleGenerate(req))
+            return
+          }
+          if (req.method === 'POST' && rest === 'journal') {
+            sendJson(res, 200, await handleJournal(req))
             return
           }
           sendJson(res, 404, { ok: false, error: `unknown endpoint: ${req.method} ${rest}` })

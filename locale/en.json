@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Daily Diary",
-    "description": "Aggregates every session of a calendar day (Asia/Shanghai) — turns, steps, model/tool time, token usage — distils 3-5 highlights, and lists the last N days in a minimal panel. Token figures are estimates, not billing records."
+    "description": "Aggregates every session of a calendar day (Asia/Shanghai) — turns, steps, model/tool time, token usage — distils 3-5 highlights, lets you write your own note of the day, and lists the last N days in a minimal panel. Token figures are estimates, not billing records."
   }
 }

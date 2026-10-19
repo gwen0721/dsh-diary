@@ -1,6 +1,6 @@
 {
   "name": "dsh-diary",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "每日日记：按自然日（Asia/Shanghai）聚合当天所有会话的轮次、步数、耗时与 token 用量，生成当天重点总结，并在极简面板中浏览最近 N 天。",
   "type": "module",
   "main": "index.js",
